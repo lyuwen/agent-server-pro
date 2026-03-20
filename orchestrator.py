@@ -182,3 +182,121 @@ async def spawn_claude(
         cwd=str(work_dir),
         env=env,
     )
+
+
+async def run_job(
+    job_id: str,
+    prompt: str,
+    work_dir: Path,
+) -> RunResponse:
+    """
+    Full job lifecycle: spawn proxy → spawn Claude → monitor → collect trace → cleanup.
+    """
+    log_file = LOGS_DIR / f"{job_id}.jsonl"
+
+    # --- Spawn proxy ---
+    try:
+        proxy_proc, proxy_port = await spawn_proxy(log_file)
+    except RuntimeError:
+        return RunResponse(
+            job_id=job_id,
+            status="proxy_start_failed",
+            work_dir=str(work_dir),
+            claude_stdout=None,
+            claude_stderr=None,
+            claude_exit_code=None,
+            trace=None,
+        )
+
+    # --- Spawn Claude ---
+    try:
+        claude_proc = await spawn_claude(prompt, work_dir, proxy_port)
+    except RuntimeError:
+        await kill_proc(proxy_proc)
+        return RunResponse(
+            job_id=job_id,
+            status="claude_not_found",
+            work_dir=str(work_dir),
+            claude_stdout=None,
+            claude_stderr=None,
+            claude_exit_code=None,
+            trace=None,
+        )
+
+    # --- Monitor both processes concurrently ---
+    claude_stdout_b = b""
+    claude_stderr_b = b""
+    status = "completed"
+
+    async def _wait_claude():
+        nonlocal claude_stdout_b, claude_stderr_b
+        claude_stdout_b, claude_stderr_b = await claude_proc.communicate()
+
+    async def _watch_proxy():
+        await proxy_proc.wait()
+
+    claude_task = asyncio.create_task(_wait_claude())
+    proxy_task = asyncio.create_task(_watch_proxy())
+
+    try:
+        done, pending = await asyncio.wait(
+            {claude_task, proxy_task},
+            timeout=CLAUDE_TIMEOUT,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+
+        if not done:
+            # Timeout — neither finished within CLAUDE_TIMEOUT
+            status = "timed_out"
+            claude_task.cancel()
+            proxy_task.cancel()
+            # Await cancelled tasks before killing processes so communicate()
+            # releases its stdout pipe reference cleanly (avoids ResourceWarning / hang)
+            await asyncio.gather(claude_task, proxy_task, return_exceptions=True)
+            await kill_proc(claude_proc)
+            await kill_proc(proxy_proc)
+
+        elif proxy_task in done and claude_task not in done:
+            # Proxy crashed before Claude finished
+            status = "proxy_crashed"
+            claude_task.cancel()
+            await asyncio.gather(claude_task, return_exceptions=True)
+            await kill_proc(claude_proc)
+
+        elif claude_task in done:
+            # Claude finished normally — shut down proxy
+            proxy_task.cancel()
+            await asyncio.gather(proxy_task, return_exceptions=True)
+            await kill_proc(proxy_proc)
+
+            exit_code = claude_proc.returncode
+            if exit_code != 0:
+                status = "failed"
+
+    except Exception:
+        # Safety net — ensure processes are cleaned up
+        await kill_proc(claude_proc)
+        await kill_proc(proxy_proc)
+        raise
+
+    # Collect stdout/stderr if captured
+    claude_stdout = claude_stdout_b.decode(errors="replace") if claude_stdout_b else None
+    claude_stderr = claude_stderr_b.decode(errors="replace") if claude_stderr_b else None
+    claude_exit_code = claude_proc.returncode if status not in ("timed_out",) else None
+
+    # Read trace
+    trace = read_trace(log_file)
+
+    # Cleanup log file
+    if not KEEP_LOGS and log_file.exists():
+        log_file.unlink()
+
+    return RunResponse(
+        job_id=job_id,
+        status=status,
+        work_dir=str(work_dir),
+        claude_stdout=claude_stdout,
+        claude_stderr=claude_stderr,
+        claude_exit_code=claude_exit_code,
+        trace=trace,
+    )
