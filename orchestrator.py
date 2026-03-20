@@ -16,7 +16,7 @@ BASE_DIR = Path(os.environ.get("BASE_DIR", os.getcwd())).resolve()
 PROXY_STARTUP_TIMEOUT = float(os.environ.get("PROXY_STARTUP_TIMEOUT", "10"))
 CLAUDE_TIMEOUT = float(os.environ.get("CLAUDE_TIMEOUT", "300"))
 KEEP_LOGS = os.environ.get("KEEP_LOGS", "false").lower() == "true"
-LOGS_DIR = Path(os.getcwd()) / "logs"
+LOGS_DIR = Path(__file__).parent / "logs"
 
 app = FastAPI()
 
@@ -92,6 +92,7 @@ async def kill_proc(proc: asyncio.subprocess.Process, grace: float = 5.0) -> Non
     try:
         proc.terminate()
     except ProcessLookupError:
+        await proc.wait()
         return
     try:
         await asyncio.wait_for(proc.wait(), timeout=grace)
