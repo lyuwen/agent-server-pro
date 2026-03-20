@@ -116,29 +116,44 @@ A FastAPI application with a single endpoint: `POST /run`.
 }
 ```
 
+**Response schema — fields always present in every response:**
+
+| Field | Type | Notes |
+|---|---|---|
+| `job_id` | string | Always present |
+| `status` | string | Always present |
+| `work_dir` | string \| null | Resolved absolute path, or `null` if resolution failed (e.g. `invalid_work_dir`) |
+| `claude_stdout` | string \| null | `null` if Claude never ran |
+| `claude_stderr` | string \| null | `null` if Claude never ran |
+| `claude_exit_code` | int \| null | `null` if Claude never ran or was killed |
+| `trace` | array \| null | `null` if proxy never started; `[]` if proxy ran but no requests were made |
+
 **Error / partial responses (all `200 OK`):**
 
-| `status` value | Meaning |
-|---|---|
-| `"completed"` | Claude exited 0 |
-| `"failed"` | Claude exited non-zero (trace + stderr returned) |
-| `"timed_out"` | Claude exceeded `CLAUDE_TIMEOUT` (partial trace returned) |
-| `"invalid_work_dir"` | Resolved path does not exist |
-| `"proxy_start_failed"` | Proxy did not emit `PROXY_PORT=` within timeout |
-| `"claude_not_found"` | `claude` binary not found in PATH |
+| `status` value | Meaning | `work_dir` | `trace` | `claude_stdout` | `claude_stderr` | `claude_exit_code` |
+|---|---|---|---|---|---|---|
+| `"completed"` | Claude exited 0 | string | full array | string | string | `0` |
+| `"failed"` | Claude exited non-zero | string | full array | string | string | non-zero int |
+| `"timed_out"` | Exceeded `CLAUDE_TIMEOUT` | string | partial array (may be `[]`) | string | string | `null` |
+| `"proxy_crashed"` | Proxy exited unexpectedly mid-run | string | partial array (may be `[]`) | `null` | `null` | `null` |
+| `"invalid_work_dir"` | Resolved path does not exist or is not a directory | `null` | `null` | `null` | `null` | `null` |
+| `"proxy_start_failed"` | Proxy did not emit `PROXY_PORT=` in time | string | `null` | `null` | `null` | `null` |
+| `"claude_not_found"` | `claude` binary not found in PATH | string | `null` | `null` | `null` | `null` |
 
 **4xx errors (malformed requests):**
-- `400` — `work_dir` resolves outside `BASE_DIR` or request body is invalid
+- `400` — request body is invalid
+- `400` — `work_dir` resolves outside `BASE_DIR`: "outside" means the resolved path is neither equal to `BASE_DIR` nor a subdirectory of it (i.e. `not resolved.startswith(BASE_DIR + os.sep) and resolved != BASE_DIR`). Note: `work_dir` omitted or equal to `BASE_DIR` is explicitly allowed.
+- `400` — `work_dir` resolves to a path that exists but is not a directory (e.g. a regular file); status `"invalid_work_dir"` is used when the path does not exist; a `400` HTTP error is returned when the path exists but is not a directory
 
 ---
 
 ## Port Discovery Handshake
 
-1. Orchestrator spawns proxy with `stdout=PIPE`, `PORT=0`
-2. Orchestrator reads proxy stdout line-by-line with a `PROXY_STARTUP_TIMEOUT` deadline
-3. On seeing `PROXY_PORT=<n>`, orchestrator extracts the port and proceeds
-4. Proxy stderr is inherited (flows to orchestrator's stderr for visibility)
-5. If deadline expires without the line, proxy is killed and the run fails with `proxy_start_failed`
+1. Orchestrator spawns proxy with `stdout=PIPE`, `stderr=inherited`, `PORT=0`
+2. Uvicorn's own startup banners go to **stderr**; stdout is reserved exclusively for the `PROXY_PORT=` line. The `main.py` modification suppresses all other stdout output and emits only this one line
+3. Orchestrator reads proxy stdout line-by-line with a `PROXY_STARTUP_TIMEOUT` deadline; it scans each line for the prefix `PROXY_PORT=` and extracts the port — the line may appear anywhere in stdout (robustness), but in practice will be the first and only stdout line
+4. On seeing `PROXY_PORT=<n>`, orchestrator extracts the port and proceeds
+5. If deadline expires without the line, proxy is `SIGTERM`ed, then `.wait()`ed (to avoid zombies), any partial log file is deleted, and the run fails with `proxy_start_failed`; all fields except `job_id`, `status`, and `work_dir` are `null` in the response
 
 ---
 
@@ -149,29 +164,40 @@ A FastAPI application with a single endpoint: `POST /run`.
 claude --dangerously-skip-permissions --print -p "<prompt>"
 ```
 
-**Environment overrides injected:**
+**Proxy subprocess environment overrides:**
+
+| Variable | Value | Purpose |
+|---|---|---|
+| `PORT` | `0` | OS assigns a free port |
+| `LOG_FILE` | `logs/{job_id}.jsonl` | Per-job trace file |
+| `API_BASE_URL` | inherited | Upstream API target |
+
+**Claude subprocess environment overrides:**
 
 | Variable | Value |
 |---|---|
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:{proxy_port}` |
 | `HTTP_PROXY` | `http://127.0.0.1:{proxy_port}` |
 | `HTTPS_PROXY` | `http://127.0.0.1:{proxy_port}` |
-| `LOG_FILE` | `logs/{job_id}.jsonl` |
 | `ANTHROPIC_API_KEY` | inherited from orchestrator env |
 
 **Working directory:** resolved absolute path of `work_dir`.
 
 **stdout/stderr:** both captured and included in the response.
 
-**Timeout:** after `CLAUDE_TIMEOUT` seconds, both Claude and the proxy subprocess are `SIGTERM`ed, the partial trace is read, and the response includes `"status": "timed_out"`.
+**Timeout & termination:** after `CLAUDE_TIMEOUT` seconds, the orchestrator sends `SIGTERM` to Claude and the proxy, waits up to 5 seconds for graceful exit, then sends `SIGKILL` to any still-running processes. Both processes are `.wait()`ed to avoid zombies. The partial trace is read, and the response includes `"status": "timed_out"`.
+
+**Normal-path proxy shutdown:** after Claude exits normally (non-timeout), the orchestrator sends `SIGTERM` to the proxy and calls `.wait()` with a 5-second timeout. If the proxy has not exited after 5 seconds, `SIGKILL` is sent followed by another `.wait()`. This matches the timeout-path escalation sequence.
+
+**Proxy crash mid-run:** the orchestrator monitors the proxy process liveness concurrently with Claude execution (via `asyncio.wait` on both tasks). If the proxy exits unexpectedly before Claude finishes, the orchestrator immediately sends `SIGTERM` → `SIGKILL` to Claude (same 5s escalation), reads any partial trace from the log file (may be `[]` if the file doesn't exist yet), and returns `"status": "proxy_crashed"`.
 
 ---
 
 ## Log File Lifecycle
 
 - Location: `logs/{job_id}.jsonl` (relative to orchestrator's cwd)
-- Created: by the proxy subprocess at first write
-- Read: by orchestrator after Claude exits
+- Created: by the proxy subprocess at first write (may not exist if proxy made no writes)
+- Read: by orchestrator after Claude exits; if the file does not exist, `trace` is `[]` (not an error)
 - Deleted: by orchestrator after reading, unless `KEEP_LOGS=true`
 - The `logs/` directory is created by the orchestrator at startup if it doesn't exist
 
@@ -192,6 +218,6 @@ No shared mutable state between concurrent runs. The orchestrator itself is asyn
 
 | File | Change |
 |---|---|
-| `main.py` | Add port-reporting on startup (small addition to `__main__` block) |
+| `main.py` | Subclass `uvicorn.Server`, override `startup()` to print `PROXY_PORT=<n>` to stdout after binding |
 | `orchestrator.py` | New file — full orchestration service |
 | `logs/` | New directory — created at runtime, gitignored |
