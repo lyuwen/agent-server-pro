@@ -129,6 +129,8 @@ if __name__ == "__main__":
     class PortReportingServer(uvicorn.Server):
         async def startup(self, sockets=None):
             await super().startup(sockets=sockets)
+            if not self.started:
+                return  # lifespan failed; self.servers was never set
             # Report the OS-assigned port to stdout (only stdout output this process emits)
             bound_port = self.servers[0].sockets[0].getsockname()[1]
             print(f"PROXY_PORT={bound_port}", flush=True)
