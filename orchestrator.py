@@ -175,6 +175,7 @@ async def spawn_claude(
     proxy_url = f"http://127.0.0.1:{proxy_port}"
     env = os.environ.copy()
     env["ANTHROPIC_BASE_URL"] = proxy_url
+    env["IS_DEMO"] = "true"  # Skip onboarding flow
     # Remove any system proxy settings that would interfere with Claude reaching our local proxy
     for key in ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]:
         env.pop(key, None)
@@ -182,6 +183,7 @@ async def spawn_claude(
     return await asyncio.create_subprocess_exec(
         claude_binary,
         "--dangerously-skip-permissions",
+        "--setting-sources", "project,local",  # skip ~/.claude, allow work_dir settings
         "--print",
         "-p", prompt,
         stdout=asyncio.subprocess.PIPE,
