@@ -146,6 +146,7 @@ async def spawn_proxy(log_file: Path) -> tuple[asyncio.subprocess.Process, int]:
 
     try:
         port = await _read_proxy_port(proc)
+        print(f"proxy launched at port: {port}")
     except RuntimeError:
         await kill_proc(proc)
         raise
@@ -174,8 +175,9 @@ async def spawn_claude(
     proxy_url = f"http://127.0.0.1:{proxy_port}"
     env = os.environ.copy()
     env["ANTHROPIC_BASE_URL"] = proxy_url
-    env["HTTP_PROXY"] = proxy_url
-    env["HTTPS_PROXY"] = proxy_url
+    # Remove any system proxy settings that would interfere with Claude reaching our local proxy
+    for key in ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]:
+        env.pop(key, None)
 
     return await asyncio.create_subprocess_exec(
         claude_binary,
