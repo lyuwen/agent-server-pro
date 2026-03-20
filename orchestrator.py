@@ -282,7 +282,7 @@ async def run_job(
     # Collect stdout/stderr if captured
     claude_stdout = claude_stdout_b.decode(errors="replace") if claude_stdout_b else None
     claude_stderr = claude_stderr_b.decode(errors="replace") if claude_stderr_b else None
-    claude_exit_code = claude_proc.returncode if status not in ("timed_out",) else None
+    claude_exit_code = claude_proc.returncode if status not in ("timed_out", "proxy_crashed") else None
 
     # Read trace
     trace = read_trace(log_file)
