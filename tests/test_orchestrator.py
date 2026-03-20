@@ -1,5 +1,4 @@
 import asyncio
-import sys
 import pytest
 from httpx import AsyncClient, ASGITransport
 from orchestrator import app
@@ -26,7 +25,6 @@ async def test_run_invalid_work_dir_outside_base(tmp_path):
         orch.BASE_DIR = original_base
 
 
-import sys
 from orchestrator import spawn_proxy, kill_proc
 
 
@@ -44,11 +42,12 @@ async def test_spawn_proxy_returns_port(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_spawn_proxy_timeout_raises(tmp_path):
+async def test_spawn_proxy_timeout_raises():
     """If proxy never prints PROXY_PORT=, _read_proxy_port raises RuntimeError."""
     import orchestrator as orch
     old = orch.PROXY_STARTUP_TIMEOUT
     orch.PROXY_STARTUP_TIMEOUT = 0.5
+    proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
             "sleep", "60",
@@ -59,8 +58,8 @@ async def test_spawn_proxy_timeout_raises(tmp_path):
             await orch._read_proxy_port(proc)
     finally:
         orch.PROXY_STARTUP_TIMEOUT = old
-        proc.terminate()
-        await proc.wait()
+        if proc is not None:
+            await kill_proc(proc)
 
 
 from orchestrator import spawn_claude
