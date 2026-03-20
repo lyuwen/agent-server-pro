@@ -157,12 +157,17 @@ async def spawn_claude(
     prompt: str,
     work_dir: Path,
     proxy_port: int,
-    claude_binary: str = "claude",
+    claude_binary: str | None = None,
 ) -> asyncio.subprocess.Process:
     """
     Launch Claude Code non-interactively with API traffic routed through the proxy.
     Raises RuntimeError("claude_not_found") if the binary is not in PATH.
+
+    The binary is resolved in order: claude_binary param > CLAUDE_BINARY env var > "claude"
     """
+    if claude_binary is None:
+        claude_binary = os.environ.get("CLAUDE_BINARY", "claude")
+
     if not shutil.which(claude_binary):
         raise RuntimeError(f"claude_not_found: '{claude_binary}' not found in PATH")
 
