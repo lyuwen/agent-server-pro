@@ -47,7 +47,7 @@ class RunResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def resolve_work_dir(raw: str | None) -> Path:
+def resolve_work_dir(raw: str | None) -> Path | None:
     """Resolve and validate work_dir. Raises HTTPException on invalid input."""
     if raw is None:
         return BASE_DIR
