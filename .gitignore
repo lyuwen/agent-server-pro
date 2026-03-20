@@ -4,3 +4,8 @@ __pycache__/
 .env
 .pytest_cache/
 .venv/
+
+# Request logs contain API keys and sensitive data
+requests.jsonl
+*.jsonl
+response.json
