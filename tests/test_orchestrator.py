@@ -61,3 +61,18 @@ async def test_spawn_proxy_timeout_raises(tmp_path):
         orch.PROXY_STARTUP_TIMEOUT = old
         proc.terminate()
         await proc.wait()
+
+
+from orchestrator import spawn_claude
+
+
+@pytest.mark.asyncio
+async def test_spawn_claude_not_found_raises(tmp_path):
+    """When claude binary is missing, spawn_claude raises RuntimeError."""
+    with pytest.raises(RuntimeError, match="claude_not_found"):
+        await spawn_claude(
+            prompt="hello",
+            work_dir=tmp_path,
+            proxy_port=9999,
+            claude_binary="__definitely_not_claude__",
+        )
