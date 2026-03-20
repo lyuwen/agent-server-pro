@@ -1,3 +1,5 @@
+import asyncio
+import sys
 import pytest
 from httpx import AsyncClient, ASGITransport
 from orchestrator import app
@@ -22,3 +24,40 @@ async def test_run_invalid_work_dir_outside_base(tmp_path):
         assert "outside" in resp.json()["detail"].lower()
     finally:
         orch.BASE_DIR = original_base
+
+
+import sys
+from orchestrator import spawn_proxy, kill_proc
+
+
+@pytest.mark.asyncio
+async def test_spawn_proxy_returns_port(tmp_path):
+    """spawn_proxy must return a valid port number and a live process."""
+    log_file = tmp_path / "test.jsonl"
+    proc, port = await spawn_proxy(log_file)
+    try:
+        assert isinstance(port, int)
+        assert 1024 <= port <= 65535
+        assert proc.returncode is None  # still running
+    finally:
+        await kill_proc(proc)
+
+
+@pytest.mark.asyncio
+async def test_spawn_proxy_timeout_raises(tmp_path):
+    """If proxy never prints PROXY_PORT=, _read_proxy_port raises RuntimeError."""
+    import orchestrator as orch
+    old = orch.PROXY_STARTUP_TIMEOUT
+    orch.PROXY_STARTUP_TIMEOUT = 0.5
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "sleep", "60",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        with pytest.raises(RuntimeError, match="proxy_start_failed"):
+            await orch._read_proxy_port(proc)
+    finally:
+        orch.PROXY_STARTUP_TIMEOUT = old
+        proc.terminate()
+        await proc.wait()

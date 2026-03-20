@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import uuid
 import asyncio
@@ -102,3 +103,51 @@ async def kill_proc(proc: asyncio.subprocess.Process, grace: float = 5.0) -> Non
         except ProcessLookupError:
             pass
         await proc.wait()
+
+
+async def _read_proxy_port(proc: asyncio.subprocess.Process) -> int:
+    """
+    Read lines from proc.stdout until PROXY_PORT=<n> is found.
+    Raises RuntimeError("proxy_start_failed") if PROXY_STARTUP_TIMEOUT expires.
+    """
+    async def _read():
+        while True:
+            line = await proc.stdout.readline()
+            if not line:
+                raise RuntimeError("proxy_start_failed: proxy stdout closed without PROXY_PORT=")
+            decoded = line.decode().strip()
+            if decoded.startswith("PROXY_PORT="):
+                return int(decoded.split("=", 1)[1])
+
+    try:
+        return await asyncio.wait_for(_read(), timeout=PROXY_STARTUP_TIMEOUT)
+    except asyncio.TimeoutError:
+        raise RuntimeError("proxy_start_failed: timeout waiting for PROXY_PORT=")
+
+
+async def spawn_proxy(log_file: Path) -> tuple[asyncio.subprocess.Process, int]:
+    """
+    Launch main.py on an OS-assigned port, wait for it to report its port.
+    Returns (process, port). Caller is responsible for termination.
+    Raises RuntimeError("proxy_start_failed") on failure.
+    """
+    env = os.environ.copy()
+    env["PORT"] = "0"
+    env["LOG_FILE"] = str(log_file)
+
+    proxy_script = Path(__file__).parent / "main.py"
+
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(proxy_script),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=None,  # inherit orchestrator stderr
+        env=env,
+    )
+
+    try:
+        port = await _read_proxy_port(proc)
+    except RuntimeError:
+        await kill_proc(proc)
+        raise
+
+    return proc, port
