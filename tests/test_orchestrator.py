@@ -11,7 +11,7 @@ async def test_run_rejects_missing_prompt():
 
 
 @pytest.mark.asyncio
-async def test_run_invalid_work_dir_outside_base(tmp_path, monkeypatch):
+async def test_run_invalid_work_dir_outside_base(tmp_path):
     import orchestrator as orch
     original_base = orch.BASE_DIR
     orch.BASE_DIR = tmp_path.resolve()
