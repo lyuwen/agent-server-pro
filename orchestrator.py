@@ -300,3 +300,24 @@ async def run_job(
         claude_exit_code=claude_exit_code,
         trace=trace,
     )
+
+
+@app.post("/run", response_model=RunResponse)
+async def run(request: RunRequest):
+    job_id = str(uuid.uuid4())
+
+    # Resolve and validate work_dir
+    resolved = resolve_work_dir(request.work_dir)
+    if resolved is None:
+        # Path does not exist
+        return RunResponse(
+            job_id=job_id,
+            status="invalid_work_dir",
+            work_dir=None,
+            claude_stdout=None,
+            claude_stderr=None,
+            claude_exit_code=None,
+            trace=None,
+        )
+
+    return await run_job(job_id=job_id, prompt=request.prompt, work_dir=resolved)

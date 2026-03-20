@@ -75,3 +75,44 @@ async def test_spawn_claude_not_found_raises(tmp_path):
             proxy_port=9999,
             claude_binary="__definitely_not_claude__",
         )
+
+
+@pytest.mark.asyncio
+async def test_run_invalid_work_dir_not_found(tmp_path):
+    import orchestrator as orch
+    original_base = orch.BASE_DIR
+    orch.BASE_DIR = tmp_path.resolve()
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/run", json={"prompt": "hi", "work_dir": "nonexistent"})
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["status"] == "invalid_work_dir"
+        assert body["trace"] is None
+        assert body["work_dir"] is None
+    finally:
+        orch.BASE_DIR = original_base
+
+
+@pytest.mark.asyncio
+async def test_run_claude_not_found(tmp_path):
+    """When claude binary doesn't exist, response status is claude_not_found."""
+    import orchestrator as orch
+    original_base = orch.BASE_DIR
+    orch.BASE_DIR = tmp_path.resolve()
+
+    # Patch spawn_claude to simulate missing binary without needing real claude
+    original_spawn = orch.spawn_claude
+    async def fake_spawn_claude(*args, **kwargs):
+        raise RuntimeError("claude_not_found: not in PATH")
+    orch.spawn_claude = fake_spawn_claude
+
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.post("/run", json={"prompt": "hi"})
+        body = resp.json()
+        assert body["status"] == "claude_not_found"
+        assert body["trace"] is None
+    finally:
+        orch.BASE_DIR = original_base
+        orch.spawn_claude = original_spawn
