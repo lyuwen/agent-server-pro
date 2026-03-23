@@ -235,13 +235,27 @@ async def run_job(
         )
 
     # --- Monitor both processes concurrently ---
-    claude_stdout_b = b""
-    claude_stderr_b = b""
+    claude_stdout_chunks: list[bytes] = []
+    claude_stderr_chunks: list[bytes] = []
     status = "completed"
 
+    async def _stream_and_capture(stream, chunks: list[bytes], prefix: str, out_stream):
+        """Read from stream line-by-line, print with prefix, and capture."""
+        while True:
+            line = await stream.readline()
+            if not line:
+                break
+            chunks.append(line)
+            # Print to orchestrator's stdout/stderr in real-time
+            out_stream.write(f"{prefix}{line.decode(errors='replace')}")
+            out_stream.flush()
+
     async def _wait_claude():
-        nonlocal claude_stdout_b, claude_stderr_b
-        claude_stdout_b, claude_stderr_b = await claude_proc.communicate()
+        await asyncio.gather(
+            _stream_and_capture(claude_proc.stdout, claude_stdout_chunks, "[claude] ", sys.stdout),
+            _stream_and_capture(claude_proc.stderr, claude_stderr_chunks, "[claude-err] ", sys.stderr),
+        )
+        await claude_proc.wait()
 
     async def _watch_proxy():
         await proxy_proc.wait()
@@ -290,7 +304,9 @@ async def run_job(
         await kill_proc(proxy_proc)
         raise
 
-    # Collect stdout/stderr if captured
+    # Collect stdout/stderr from captured chunks
+    claude_stdout_b = b"".join(claude_stdout_chunks)
+    claude_stderr_b = b"".join(claude_stderr_chunks)
     claude_stdout = claude_stdout_b.decode(errors="replace") if claude_stdout_b else None
     claude_stderr = claude_stderr_b.decode(errors="replace") if claude_stderr_b else None
     claude_exit_code = claude_proc.returncode if status not in ("timed_out", "proxy_crashed") else None
