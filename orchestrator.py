@@ -55,9 +55,11 @@ def resolve_work_dir(raw: str | None) -> Path | None:
 
     candidate = (BASE_DIR / raw).resolve()
 
-    # Path traversal check
-    if candidate != BASE_DIR and not str(candidate).startswith(str(BASE_DIR) + os.sep):
-        raise HTTPException(status_code=400, detail=f"work_dir resolves outside BASE_DIR: {candidate}")
+    # Path traversal check (skip if BASE_DIR is root - all paths are under root)
+    base_str = str(BASE_DIR)
+    if base_str != "/":
+        if candidate != BASE_DIR and not str(candidate).startswith(base_str + os.sep):
+            raise HTTPException(status_code=400, detail=f"work_dir resolves outside BASE_DIR: {candidate}")
 
     # Existence check
     if not candidate.exists():
