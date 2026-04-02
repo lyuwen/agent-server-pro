@@ -185,7 +185,7 @@ async def spawn_claude(
     return await asyncio.create_subprocess_exec(
         claude_binary,
         "--dangerously-skip-permissions",
-        "--setting-sources", "project,local",  # skip ~/.claude, allow work_dir settings
+        "--setting-sources", "user,project,local",  # include user-level ~/.claude settings
         "--print",
         "--output-format", "stream-json",
         "--verbose",
