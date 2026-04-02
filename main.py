@@ -14,6 +14,15 @@ app = FastAPI()
 
 API_BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 LOG_FILE = os.environ.get("LOG_FILE", "requests.jsonl")
+VERBOSE_PROXY = os.environ.get("VERBOSE_PROXY", "false").lower() == "true"
+
+
+def _log_verbose(prefix: str, msg: str) -> None:
+    """Print to stderr if VERBOSE_PROXY is enabled."""
+    if VERBOSE_PROXY:
+        import sys
+        sys.stderr.write(f"[proxy] {prefix} {msg}\n")
+        sys.stderr.flush()
 
 
 def log_to_jsonl(record: dict[str, Any]) -> None:
@@ -225,6 +234,8 @@ async def proxy(full_path: str, request: Request):
         # Non-streaming: simple forward
         try:
             status, content, response_headers, req_body = await forward_request(request)
+            _log_verbose(">>>", f"{request.method} {request.url.path} ({len(req_body)} bytes)")
+            _log_verbose("<<<", f"{status} ({len(content)} bytes): {content[:500].decode(errors='replace')}")
             record = build_record(request, status, content, req_body)
             log_to_jsonl(record)
             return Response(content=content, status_code=status, headers=response_headers)
@@ -255,6 +266,7 @@ async def proxy(full_path: str, request: Request):
 
     async def stream_and_buffer():
         try:
+            _log_verbose(">>>", f"{request.method} {request.url.path} (streaming, {len(req_body)} bytes)")
             async for chunk in response.aiter_bytes():
                 sse_buffer.append(chunk)
                 yield chunk
@@ -264,6 +276,7 @@ async def proxy(full_path: str, request: Request):
 
             # Log the reconstructed message
             reconstructed = parse_sse_to_message(sse_buffer)
+            _log_verbose("<<<", f"stream complete: {json.dumps(reconstructed, ensure_ascii=False)[:500]}")
             record = build_record(request, status, None, req_body)
             record["response"]["body"] = reconstructed
             record["response"]["streaming"] = True
