@@ -194,6 +194,7 @@ async def spawn_claude(
         stderr=asyncio.subprocess.PIPE,
         cwd=str(work_dir),
         env=env,
+        limit=100 * 1024 * 1024,  # 100MB line buffer for large stream-json lines
     )
 
 
