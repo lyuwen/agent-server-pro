@@ -186,7 +186,7 @@ async def spawn_claude(
         claude_binary,
         "--dangerously-skip-permissions",
         "--setting-sources", "project,local",  # skip ~/.claude, allow work_dir settings
-        "--print",
+        "--output-format", "stream-json",
         "-p", prompt,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
